@@ -1,0 +1,56 @@
+แนวทาง Deploy ขึ้น server จริง (สรุปสั้นและใช้งานได้จริง)
+1) เตรียมเครื่อง/สิทธิ์
+ติดตั้ง Node.js LTS
+ติดตั้ง Teleport CLI (tsh) และยืนยันว่า access/profiles ของเครื่อง server ใช้งานได้
+เปิดสิทธิ์ไฟร์วอลล์พอร์ตที่จะให้เข้าถึง (ดูข้อ 3)
+2) ดึงโค้ดและติดตั้ง dependency
+คัดลอกโฟลเดอร์ QLY-IO ขึ้นเครื่อง server (หรือใช้ git)
+ติดตั้งแพ็กเกจ:
+npm ci
+3) ตั้งค่า Port และ Network
+Backend ปัจจุบัน auto-select พอร์ตถ้าว่าง (3100-3110 แล้ว 3001-3009) หรือใช้ PORT แบบกำหนดเองได้
+แนะนำกำหนดพอร์ตคงที่เพื่อการทำ reverse proxy:
+Linux/macOS: export PORT=3100
+Windows (ชั่วคราว): set PORT=3100
+เปิดไฟร์วอลล์พอร์ต 3100 (หรือตามที่ตั้ง) เฉพาะภายใน/หลัง reverse proxy ตามนโยบาย
+4) สตาร์ท Backend เป็น Service
+Linux (systemd)
+ExecStart=/usr/bin/node /path/QLY-IO/Server.js
+Environment=PORT=3100
+systemctl enable --now qly-io.service
+Windows (แนะนำ nssm หรือ pm2)
+nssm install QLY-IO "C:\Program Files\nodejs\node.exe" "D:\QLY-IO\Server.js"
+ตั้ง Environment PORT=3100 และ Working directory เป็น D:\QLY-IO
+start service
+ตรวจสอบ:
+curl http://localhost:3100/server-info
+curl http://localhost:3100/status
+5) Reverse Proxy และ TLS (ถ้าต้องให้ผู้ใช้งานเข้าผ่าน HTTPS)
+Nginx/Apache/IIS map path → http://127.0.0.1:3100
+เปิด TLS ที่ reverse proxy (Let’s Encrypt หรือใบเซิร์ฟเวอร์องค์กร)
+ตั้ง CORS domain ของ UI (ถ้าเสิร์ฟ UI คนละโดเมน)
+6) เสิร์ฟหน้า UI
+ทางง่าย: เสิร์ฟไฟล์ TeleportConnectionManager.html ผ่าน web server เดียวกับ reverse proxy (Nginx: root /var/www/site; index TeleportConnectionManager.html)
+หรือเปิดเป็น Static site แยกโดเมน/ซับพาธก็ได้ (ตัวหน้า HTML auto-discover backend ผ่าน /server-info)
+7) Teleport SSH tunnel ใน Production
+วิธีแนะนำ (ไม่ต้องกด SSO ทุกครั้ง):
+ใช้ Machine ID / Service Account ของ Teleport สำหรับ non-interactive login (ถ้าสนับสนุนในองค์กร)
+หรือใช้ local auth/short-lived cert ที่ต่ออายุอัตโนมัติผ่านสคริปต์เฉพาะ
+หากยังต้องใช้ SSO manual:
+เปิด PowerShell บน server แล้วรัน tsh login --proxy cardx.teleport.sh:443 --auth=sso
+จากนั้นผู้ใช้หน้าเว็บกด “เชื่อมต่อ” เพื่อสร้าง tunnel
+8) ตรวจสุขภาพและการดีบัก
+/server-info ดูพอร์ตที่ backend ผูกใช้อยู่
+/status ดูสถานะ connected/localPort/pid
+Log service (systemd journal / Windows Event Viewer หรือไฟล์ log ของ pm2/nssm)
+9) ความปลอดภัย
+จำกัด CORS ให้เฉพาะโดเมน UI
+ซ่อน /execute-sql หลังไฟร์วอลล์ภายใน (หรือ IP allowlist) และรักษา principle of least privilege สำหรับ DB user (read-only)
+พิจารณา Header security (CSP, X-Frame-Options) ที่ reverse proxy
+10) การอัปเดต/รีสตาร์ท
+ดึงโค้ดใหม่ → npm ci → restart service
+ตรวจ /server-info และหน้า UI ว่าต่อ SSE ได้ปกติ
+หมายเหตุเฉพาะระบบนี้
+HTML มี auto-discover backend port จาก /server-info จึงไม่ต้องแก้พอร์ตในไฟล์หน้าเว็บ
+การ Export to Excel ใช้ CDN xlsx; ถ้าติดนโยบาย air‑gapped ให้ bundle ไลบรารีไว้ภายในแทน
+ถ้าพอร์ต tunnel ซ้ำ ให้ปิดโปรเซสเดิมก่อน หรือปรับโค้ดให้เลือกพอร์ตถัดไปอัตโนมัติ (มีรองรับบางส่วนแล้ว)
