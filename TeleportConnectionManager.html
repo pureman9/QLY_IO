@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teleport Connection Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <!-- Chosen Palette: Calm Neutrals -->
+    <!-- Application Structure Plan: ออกแบบเป็น Single-Card Dashboard ที่เน้นการทำงานเฉพาะอย่าง (Task-Oriented) เพื่อให้ผู้ใช้สามารถเลือกสภาพแวดล้อม (Environment) และจัดการการเชื่อมต่อได้ในหน้าจอเดียว ลดความซับซ้อนและตรงตาม Use Case ที่ระบุไว้ในเอกสาร คือการ Connect/Disconnect อย่างรวดเร็ว โครงสร้างนี้ถูกเลือกเพราะมันตอบโจทย์การใช้งานที่ต้องการความเรียบง่ายและลดขั้นตอนได้อย่างมีประสิทธิภาพสูงสุด User flow คือ: เลือก -> เชื่อมต่อ -> ดูสถานะ -> ยกเลิกการเชื่อมต่อ ทั้งหมดเกิดขึ้นในคอมโพเนนต์เดียว -->
+    <!-- Visualization & Content Choices: 
+        - รายการ Environment: Goal: Organize/Select -> Presentation: Dropdown (<select>) -> Interaction: เลือกเพื่อกำหนดเป้าหมายการเชื่อมต่อ -> Justification: เป็น UIมาตรฐาน เหมาะกับการเลือก 1 อย่างจากรายการที่กำหนด
+        - สถานะการเชื่อมต่อ: Goal: Inform -> Presentation: Badge สีพร้อมข้อความ -> Interaction: แสดงผลอย่างเดียว -> Justification: สื่อสารสถานะปัจจุบันให้ผู้ใช้เห็นได้ทันที
+        - ปุ่มควบคุม: Goal: Action -> Presentation: Buttons (Connect/Disconnect) -> Interaction: คลิกเพื่อเริ่ม/หยุดการทำงาน -> Justification: เป็น UI พื้นฐานสำหรับการสั่งการ
+        - ข้อมูลการเชื่อมต่อ: Goal: Inform -> Presentation: Text list -> Interaction: แสดงผลอย่างเดียว -> Justification: แสดงรายละเอียดที่จำเป็นหลังเชื่อมต่อสำเร็จตามข้อกำหนด FR-03
+        - Library/Method: ใช้ Vanilla JavaScript ในการจัดการสถานะและอัปเดต DOM ทั้งหมด ไม่มีการใช้ Library สำหรับกราฟเพราะไม่มีข้อมูลที่ต้องแสดงผลเป็นภาพ -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+    <style>
+        body {
+            font-family: 'Sarabun', sans-serif;
+        }
+        .fade-in {
+            animation: fadeIn 0.5s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .spinner {
+            border: 2px solid rgba(0,0,0,0.1);
+            border-left-color: #4f46e5;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        details > summary {
+            list-style: none;
+        }
+        details > summary::-webkit-details-marker {
+            display: none;
+        }
+        .arrow-icon {
+            transition: transform 0.2s ease-in-out;
+        }
+        details[open] .arrow-icon {
+            transform: rotate(90deg);
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 flex items-center justify-center min-h-screen p-4">
+
+    <!-- Main Page: Teleport Connection -->
+    <div id="main-page" class="w-full max-w-lg bg-slate-800 rounded-xl shadow-xl p-6 md:p-8 space-y-6 border border-slate-700">
+        
+        <header class="text-center">
+            <h1 class="text-2xl font-bold text-slate-100">Teleport Connection Manager</h1>
+            <p class="text-slate-400 mt-1">เลือกสภาพแวดล้อมและจัดการการเชื่อมต่อของคุณ</p>
+        </header>
+
+        <div class="space-y-4">
+            <div>
+                <label for="environment-select" class="block text-sm font-medium text-slate-300 mb-1">สภาพแวดล้อม (Environment)</label>
+                <select id="environment-select" class="block w-full px-3 py-2 bg-slate-700 border border-slate-600 text-slate-100 rounded-md shadow-sm focus:outline-none focus:ring-indigo-400 focus:border-indigo-400 sm:text-sm">
+                    <option value="sit">SIT2</option>
+                    <option value="uat1">UAT</option>
+                    <option value="uat2">UAT2</option>
+                </select>
+            </div>
+            
+            <div class="flex items-center justify-between bg-slate-700/50 p-3 rounded-lg">
+                <span class="text-sm font-medium text-slate-300">สถานะการเชื่อมต่อ</span>
+                <span id="status-badge" class="px-3 py-1 text-xs font-semibold rounded-full transition-colors duration-300"></span>
+            </div>
+        </div>
+
+        <div id="connection-details" class="hidden space-y-3 bg-slate-800 p-4 rounded-lg border border-slate-700">
+             <h3 class="font-semibold text-slate-800 border-b pb-2">รายละเอียดการเชื่อมต่อ</h3>
+             <div class="pt-2 space-y-2">
+                 <details class="text-sm border rounded-lg bg-slate-700 border-slate-600">
+                    <summary class="flex justify-between items-center cursor-pointer font-medium text-indigo-300 hover:bg-slate-600 p-3">
+                        <span>แสดงสถานะ TSH แบบเต็ม (จาก Server)</span>
+                        <svg class="arrow-icon w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                    </summary>
+                    <pre id="details-tsh-status" class="mt-2 text-xs text-slate-200 whitespace-pre-wrap bg-slate-800 p-3 font-mono border-t border-slate-600"></pre>
+                 </details>
+                <button id="open-db-modal-btn" class="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white text-sm font-semibold py-2 px-4 rounded-lg hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-400 focus:ring-offset-slate-800 transition-all duration-300">
+                    🔌 เชื่อมต่อฐานข้อมูล
+                 </button>
+                 <button id="generate-summary-btn" class="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white text-sm font-semibold py-2 px-4 rounded-lg hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-400 focus:ring-offset-slate-800 transition-all duration-300">
+                    ✨ สร้างข้อความแจ้งทีม
+                 </button>
+             </div>
+        </div>
+
+        <div id="error-container" class="hidden space-y-3">
+            <div id="error-message" class="text-sm text-center text-red-200 bg-red-900/40 border border-red-800 p-3 rounded-lg"></div>
+            <button id="troubleshoot-btn" class="w-full flex items-center justify-center gap-2 bg-red-700 text-white text-sm font-semibold py-2 px-4 rounded-lg hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-400 focus:ring-offset-slate-800 transition-all duration-300">
+                ✨ วิเคราะห์ปัญหาการเชื่อมต่อ
+            </button>
+        </div>
+
+        <div id="gemini-output-container" class="hidden space-y-3 bg-slate-800 p-4 rounded-lg border border-slate-700">
+            <div id="gemini-loading" class="flex items-center justify-center gap-2 text-slate-300">
+                <div class="spinner"></div>
+                <span>กำลังขอคำแนะนำจาก Gemini...</span>
+            </div>
+            <div id="gemini-content" class="hidden">
+                 <div class="flex justify-between items-center mb-2">
+                    <h3 class="font-semibold text-slate-100">ผลลัพธ์จาก Gemini</h3>
+                    <button id="copy-btn" class="text-xs bg-slate-700 text-slate-200 px-2 py-1 rounded-md hover:bg-slate-600">คัดลอก</button>
+                </div>
+                <pre id="gemini-output-text" class="text-sm text-slate-100 whitespace-pre-wrap bg-slate-900 p-3 rounded-md font-sans"></pre>
+            </div>
+        </div>
+
+        <!-- SSO Login Modal -->
+        <div id="sso-modal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 fade-in">
+            <div class="bg-slate-800 rounded-lg shadow-xl w-full max-w-md p-6 space-y-4 border border-slate-700">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-lg font-semibold text-slate-100">Teleport SSO Login</h2>
+                    <button id="sso-close-btn" class="text-slate-300 hover:text-white">✕</button>
+                </div>
+                <p class="text-sm text-slate-300">คลิกปุ่มด้านล่างเพื่อสั่ง <code class="font-mono">tsh login --proxy cardx.teleport.sh:443 --auth=sso</code>. หน้าต่างเบราว์เซอร์จะเปิดเพื่อยืนยันตัวตน</p>
+                <div id="sso-status" class="text-xs text-slate-300 bg-slate-900 border border-slate-700 rounded p-3 whitespace-pre-wrap"></div>
+                <div class="flex gap-3 pt-2">
+                    <button id="sso-run-btn" class="w-full bg-indigo-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-400 focus:ring-offset-slate-900">Run Command</button>
+                    <button id="sso-cancel-btn" class="w-full bg-slate-700 text-slate-100 font-semibold py-2 px-4 rounded-lg hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 focus:ring-offset-slate-900">ปิด</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="pt-2 flex flex-col sm:flex-row gap-3">
+            <button id="sso-login-btn" class="w-full bg-slate-700 text-slate-100 font-semibold py-2 px-4 rounded-lg shadow-sm hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 focus:ring-offset-slate-900 transition-all duration-300">
+                เริ่ม SSO Login
+            </button>
+            <button id="connect-btn" class="w-full bg-indigo-600 text-white font-semibold py-2 px-4 rounded-lg shadow-sm hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-400 focus:ring-offset-slate-900 transition-all duration-300 disabled:bg-slate-700 disabled:cursor-not-allowed">
+                เชื่อมต่อ
+            </button>
+            <button id="disconnect-btn" class="w-full bg-slate-600 text-white font-semibold py-2 px-4 rounded-lg shadow-sm hover:bg-slate-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 focus:ring-offset-slate-900 transition-all duration-300 disabled:bg-slate-700 disabled:cursor-not-allowed">
+                ยกเลิกการเชื่อมต่อ
+            </button>
+        </div>
+    </div>
+    
+    <!-- SQL Query Page -->
+    <div id="sql-page" class="hidden w-full max-w-none bg-slate-800 rounded-xl shadow-xl p-6 md:p-8 space-y-6 fade-in border border-slate-700">
+        <header class="flex justify-between items-center pb-4 border-b">
+            <div>
+                 <h1 class="text-2xl font-bold text-slate-100">SQL Query Runner</h1>
+                 <p class="text-slate-400 mt-1">เชื่อมต่อกับฐานข้อมูล <span id="sql-page-db-info" class="font-semibold text-slate-300"></span></p>
+            </div>
+            <button id="back-to-main-btn" class="bg-slate-700 text-slate-100 font-semibold py-2 px-4 rounded-lg shadow-sm hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 focus:ring-offset-slate-800">
+                กลับหน้าหลัก
+            </button>
+        </header>
+        <div class="space-y-4">
+            <div class="sticky top-0 z-20 bg-slate-800 pt-2 pb-3 border-b border-slate-700">
+                <label for="sql-query-input" class="block text-sm font-medium text-slate-300">SQL Command</label>
+                <textarea id="sql-query-input" rows="12" class="mt-1 block w-full px-3 py-2 bg-slate-900 border border-slate-600 text-slate-100 placeholder-slate-400 rounded-md shadow-sm focus:outline-none focus:ring-indigo-400 focus:border-indigo-400 sm:text-sm font-mono" placeholder="SELECT ..."></textarea>
+                <div id="sql-validate-message" class="mt-2 text-xs text-slate-300"></div>
+            </div>
+            <div id="sql-result-container" class="hidden">
+                 <div class="flex items-center justify-between">
+                     <label class="block text-sm font-medium text-slate-300">ผลลัพธ์</label>
+                     <button id="export-excel-btn" class="hidden text-xs bg-emerald-600 text-white px-3 py-1 rounded-md hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-400">Export to Excel</button>
+                 </div>
+                 <div id="sql-result-table" class="mt-2 bg-slate-800 border border-slate-700 rounded-md h-[60vh] overflow-auto"></div>
+            </div>
+            <div id="sql-query-message" class="text-sm text-center p-2 rounded-md"></div>
+            <div class="flex items-center gap-3 pt-2">
+                <button type="button" id="execute-sql-btn" class="w-full flex justify-center bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-sm hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-400 focus:ring-offset-slate-800">
+                    Execute Query
+                </button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- DB Connection Modal -->
+    <div id="db-modal" class="hidden fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 fade-in">
+        <div class="bg-slate-800 rounded-lg shadow-xl w-full max-w-sm p-6 space-y-4 border border-slate-700">
+            <h2 id="db-modal-title" class="text-xl font-bold text-slate-100">เชื่อมต่อฐานข้อมูล</h2>
+            <form id="db-form" class="space-y-4">
+                <div>
+                    <label for="db-host" class="block text-sm font-medium text-slate-300">Server Host</label>
+                    <input type="text" id="db-host" value="localhost" class="mt-1 block w-full px-3 py-2 bg-slate-900 border border-slate-600 text-slate-100 rounded-md shadow-sm focus:outline-none focus:ring-indigo-400 focus:border-indigo-400 sm:text-sm">
+                </div>
+                <div>
+                    <label for="db-port" class="block text-sm font-medium text-slate-300">Port</label>
+                    <input type="number" id="db-port" class="mt-1 block w-full px-3 py-2 bg-slate-900 border border-slate-600 text-slate-100 rounded-md shadow-sm focus:outline-none focus:ring-indigo-400 focus:border-indigo-400 sm:text-sm">
+                </div>
+                <div>
+                    <label for="db-user" class="block text-sm font-medium text-slate-300">Username</label>
+                    <input type="text" id="db-user" class="mt-1 block w-full px-3 py-2 bg-slate-900 border border-slate-600 text-slate-100 rounded-md shadow-sm focus:outline-none focus:ring-indigo-400 focus:border-indigo-400 sm:text-sm">
+                </div>
+                <div>
+                    <label for="db-pass" class="block text-sm font-medium text-slate-300">Password</label>
+                    <input type="password" id="db-pass" class="mt-1 block w-full px-3 py-2 bg-slate-900 border border-slate-600 text-slate-100 rounded-md shadow-sm focus:outline-none focus:ring-indigo-400 focus:border-indigo-400 sm:text-sm">
+                </div>
+                <div id="db-test-result" class="text-sm text-center p-2 rounded-md"></div>
+                <div class="flex items-center gap-3 pt-2">
+                    <button type="submit" id="test-db-btn" class="w-full flex justify-center bg-indigo-600 text-white font-semibold py-2 px-4 rounded-lg shadow-sm hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-400 focus:ring-offset-slate-900">
+                        Test Connection
+                    </button>
+                    <button type="button" id="close-db-btn" class="w-full bg-slate-700 text-slate-100 font-semibold py-2 px-4 rounded-lg shadow-sm hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-400 focus:ring-offset-slate-900">
+                        ปิด
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const envData = {
+                sit: { name: 'SIT', port: 4085 },
+                uat1: { name: 'UAT1', port: 4023 },
+                uat2: { name: 'UAT2', port: 4022 }
+            };
+
+            let state = {
+                currentPage: 'main', // 'main' or 'sql'
+                status: 'disconnected',
+                selectedEnv: 'sit',
+                connectionDetails: null,
+                errorMessage: '',
+                geminiLoading: false,
+                geminiOutput: null,
+                isDbModalVisible: false,
+                dbTestStatus: 'idle',
+                dbTestMessage: '',
+                sqlQueryStatus: 'idle',
+                sqlQueryResult: '',
+                sqlQueryMessage: '',
+
+                dbConnectionInfo: null,
+            };
+
+            // Page containers
+            const mainPage = document.getElementById('main-page');
+            const sqlPage = document.getElementById('sql-page');
+            
+            // Main UI elements
+            const environmentSelect = document.getElementById('environment-select');
+            const statusBadge = document.getElementById('status-badge');
+            const connectBtn = document.getElementById('connect-btn');
+            const disconnectBtn = document.getElementById('disconnect-btn');
+            const connectionDetailsDiv = document.getElementById('connection-details');
+            const errorContainer = document.getElementById('error-container');
+            const errorMessageDiv = document.getElementById('error-message');
+            const detailsTshStatus = document.getElementById('details-tsh-status');
+            
+            // Gemini elements
+            const generateSummaryBtn = document.getElementById('generate-summary-btn');
+            const troubleshootBtn = document.getElementById('troubleshoot-btn');
+            const geminiOutputContainer = document.getElementById('gemini-output-container');
+            const geminiLoading = document.getElementById('gemini-loading');
+            const geminiContent = document.getElementById('gemini-content');
+            const geminiOutputText = document.getElementById('gemini-output-text');
+            const copyBtn = document.getElementById('copy-btn');
+            const ssoLoginBtn = document.getElementById('sso-login-btn');
+            
+            // DB Modal elements
+            const dbModal = document.getElementById('db-modal');
+            const dbForm = document.getElementById('db-form');
+            const dbPortInput = document.getElementById('db-port');
+            const dbHostInput = document.getElementById('db-host');
+            const dbUserInput = document.getElementById('db-user');
+            const testDbBtn = document.getElementById('test-db-btn');
+            const closeDbBtn = document.getElementById('close-db-btn');
+            const dbTestResult = document.getElementById('db-test-result');
+            const openDbModalBtn = document.getElementById('open-db-modal-btn');
+            const ssoModal = document.getElementById('sso-modal');
+            const ssoStatus = document.getElementById('sso-status');
+            const ssoRunBtn = document.getElementById('sso-run-btn');
+            const ssoCancelBtn = document.getElementById('sso-cancel-btn');
+            const ssoCloseBtn = document.getElementById('sso-close-btn');
+
+            // SQL Query Page elements
+            const sqlQueryInput = document.getElementById('sql-query-input');
+            const executeSqlBtn = document.getElementById('execute-sql-btn');
+            const sqlResultContainer = document.getElementById('sql-result-container');
+            const sqlResultTable = document.getElementById('sql-result-table');
+            const sqlQueryMessage = document.getElementById('sql-query-message');
+            const backToMainBtn = document.getElementById('back-to-main-btn');
+            const sqlPageDbInfo = document.getElementById('sql-page-db-info');
+            const sqlValidateMessage = document.getElementById('sql-validate-message');
+            const exportExcelBtn = document.getElementById('export-excel-btn');
+
+            let BACKEND_URL = 'http://localhost:3000';
+            let eventSource = null;
+            const PREFERRED_COLUMNS = [
+                { key: 'CIF', label: 'CIF' },
+                { key: 'create_date', label: 'create_date' },
+                { key: 'Approve_reason', label: 'Approve_reason' },
+                { key: 'CID', label: 'CID' },
+                { key: 'created_datetime', label: 'created_datetime' },
+                { key: 'main(B)/sub(S)', label: 'main(B)/sub(S)' },
+                { key: 'CARD_LV_ACC', label: 'CARD_LV_ACC' },
+                { key: 'card_number', label: 'card_number' },
+                { key: 'card_status', label: 'card_status' },
+                { key: 'block_code', label: 'block_code' },
+            ];
+            const DEFAULT_SQL_QUERY = `SELECT
+    a.customer_no AS CIF,
+    g.created_datetime AS create_date,
+    at.approved_reason AS Approve_reason,
+    b.id_no AS CID,
+    g.created_datetime,
+    g.application_type as "main(B)/sub(S)",
+    g.account_number as CARD_LV_ACC,
+    g.card_number,
+    g.card_status ,
+    k1.block_code
+FROM
+    mobius_v1.tbl_ccii_customer_master a
+LEFT JOIN (
+    SELECT id_no, customer_id
+    FROM mobius_v1.tbl_ccii_customer_master_identification
+) b ON a.id = b.customer_id
+LEFT JOIN (
+    SELECT id, customer_id
+    FROM mobius_v1.tbl_ccii_customer_master_address
+    WHERE default_address = 'PRI'
+) c ON a.id = c.customer_id
+LEFT JOIN (
+    SELECT id, customer_id
+    FROM mobius_v1.tbl_ccii_customer_master_address
+    WHERE address_type = 'I'
+) z ON a.id = z.customer_id
+LEFT JOIN (
+    SELECT id, customer_id
+    FROM mobius_v1.tbl_ccii_customer_master_address
+    WHERE address_type = 'A'
+) x ON a.id = x.customer_id
+LEFT JOIN (
+    SELECT id, customer_id
+    FROM mobius_v1.tbl_ccii_customer_master_address
+    WHERE address_type = 'O'
+) v ON a.id = v.customer_id
+LEFT JOIN (
+    SELECT id, customer_id, econtact_detail, area_code
+    FROM mobius_v1.tbl_ccii_customer_master_econtact
+    WHERE econtact_code = 'PM'
+) d ON a.id = d.customer_id
+LEFT JOIN (
+    SELECT id, customer_id, econtact_detail
+    FROM mobius_v1.tbl_ccii_customer_master_econtact
+    WHERE econtact_code = 'PE'
+) y ON a.id = y.customer_id
+LEFT JOIN cardcore_issuing.tbl_cardcore_card_master g ON a.customer_no = g.customer_number
+LEFT JOIN cardcore_issuing.tbl_cardcore_facility_group_account_master j ON g.account_number = j.account_number
+LEFT JOIN cardcore_issuing.tbl_cardcore_group_account_master k1 ON g.account_number = k1.account_number
+Left join cardcore_issuing.tbl_cardcore_card_spending_control k3 on g.card_link = k3.card_link 
+LEFT JOIN mobius_v1.tbl_ccii_customer_master_account_rel k2 ON g.card_number = k2.account_no
+LEFT JOIN cardcore_issuing.tbl_cardcore_application at ON k1.application_number = at.application_id
+LEFT JOIN cardcore_issuing.tbl_cardcore_card_account_relationship cl ON g.card_link = cl.supplementary_card_link 
+ORDER BY
+    g.created_datetime DESC
+LIMIT 100;`;
+
+            function setState(newState) {
+                Object.assign(state, newState);
+                render();
+            }
+
+            function render() {
+                // Page visibility
+                if (state.currentPage === 'main') {
+                    mainPage.style.display = 'block';
+                    sqlPage.classList.add('hidden');
+                } else { // 'sql'
+                    mainPage.style.display = 'none';
+                    sqlPage.classList.remove('hidden');
+                    sqlPageDbInfo.textContent = `${state.dbConnectionInfo.user}@${state.dbConnectionInfo.host}:${state.dbConnectionInfo.port}`;
+                }
+
+                // Main UI Rendering
+                errorContainer.classList.add('hidden');
+                connectionDetailsDiv.classList.add('hidden');
+                
+                if(!state.geminiLoading && !state.geminiOutput) {
+                   geminiOutputContainer.classList.add('hidden');
+                } else {
+                   geminiOutputContainer.classList.remove('hidden');
+                }
+
+                if(state.geminiLoading) {
+                    geminiLoading.style.display = 'flex';
+                    geminiContent.classList.add('hidden');
+                } else {
+                    geminiLoading.style.display = 'none';
+                    if(state.geminiOutput) {
+                        geminiContent.classList.remove('hidden');
+                        geminiOutputText.textContent = state.geminiOutput;
+                    } else {
+                        geminiContent.classList.add('hidden');
+                    }
+                }
+                
+                environmentSelect.disabled = state.status === 'connecting' || state.status === 'connected';
+                connectBtn.disabled = state.status === 'connecting' || state.status === 'connected';
+                disconnectBtn.disabled = state.status !== 'connected';
+
+                switch (state.status) {
+                    case 'disconnected':
+                        statusBadge.textContent = 'Disconnected';
+                        statusBadge.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800';
+                        connectBtn.textContent = 'เชื่อมต่อ';
+                        break;
+                    case 'connecting':
+                        statusBadge.textContent = 'Connecting...';
+                        statusBadge.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800 animate-pulse';
+                        connectBtn.textContent = 'กำลังเชื่อมต่อ...';
+                        break;
+                    case 'connected':
+                        const lp = state.connectionDetails?.localPort ? ` (port ${state.connectionDetails.localPort})` : '';
+                        statusBadge.textContent = `Connected to ${state.connectionDetails.name}${lp}`;
+                        statusBadge.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800';
+                        connectionDetailsDiv.classList.remove('hidden');
+                        connectionDetailsDiv.classList.add('fade-in');
+                        detailsTshStatus.textContent = state.connectionDetails.statusText;
+                        break;
+                    case 'error':
+                         statusBadge.textContent = 'Connection Failed';
+                         statusBadge.className = 'px-3 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800';
+                         errorContainer.classList.remove('hidden');
+                         errorMessageDiv.textContent = state.errorMessage;
+                         connectBtn.textContent = 'เชื่อมต่ออีกครั้ง';
+                         connectBtn.disabled = false;
+                         disconnectBtn.disabled = true;
+                         environmentSelect.disabled = false;
+                         break;
+                }
+
+                // DB Modal Rendering
+                state.isDbModalVisible ? dbModal.classList.remove('hidden') : dbModal.classList.add('hidden');
+                if (state.isDbModalVisible) {
+                    // Default port by environment
+                    dbPortInput.value = envData[state.selectedEnv].port;
+                    // Default host is always localhost
+                    dbHostInput.value = 'localhost';
+                }
+
+                // DB Test Status Rendering
+                dbTestResult.textContent = state.dbTestMessage;
+                switch (state.dbTestStatus) {
+                    case 'idle':
+                        testDbBtn.textContent = 'Test Connection';
+                        testDbBtn.disabled = false;
+                        dbTestResult.className = 'text-sm text-center p-2 rounded-md';
+                        break;
+                    case 'testing':
+                        testDbBtn.textContent = 'Testing...';
+                        testDbBtn.disabled = true;
+                        dbTestResult.className = 'text-sm text-center p-2 rounded-md bg-yellow-100 text-yellow-800';
+                        break;
+                    case 'success':
+                        testDbBtn.textContent = 'Test Connection';
+                        testDbBtn.disabled = false;
+                        dbTestResult.className = 'text-sm text-center p-2 rounded-md';
+                        break;
+                    case 'failed':
+                        testDbBtn.textContent = 'Test Again';
+                        testDbBtn.disabled = false;
+                        dbTestResult.className = 'text-sm text-center p-2 rounded-md bg-red-100 text-red-800';
+                        break;
+                }
+                
+                // SQL Query Panel Rendering
+                sqlQueryMessage.textContent = state.sqlQueryMessage;
+                if (state.sqlQueryResult && state.sqlQueryResult.length > 0) {
+                    sqlResultContainer.classList.remove('hidden');
+                    renderResultTable(state.sqlQueryResult);
+                    exportExcelBtn.classList.remove('hidden');
+                } else {
+                    sqlResultContainer.classList.add('hidden');
+                    exportExcelBtn.classList.add('hidden');
+                }
+
+                // Clear validation message
+                sqlValidateMessage.textContent = '';
+                sqlValidateMessage.className = 'mt-2 text-xs';
+
+                switch(state.sqlQueryStatus) {
+                    case 'idle':
+                        executeSqlBtn.disabled = false;
+                        executeSqlBtn.textContent = 'Execute Query';
+                        sqlQueryMessage.className = 'text-sm text-center p-2 rounded-md';
+                        break;
+                    case 'querying':
+                        executeSqlBtn.disabled = true;
+                        executeSqlBtn.textContent = 'Querying...';
+                        sqlQueryMessage.className = 'text-sm text-center p-2 rounded-md bg-yellow-100 text-yellow-800';
+                        break;
+                    case 'success':
+                        executeSqlBtn.disabled = false;
+                        executeSqlBtn.textContent = 'Execute Query';
+                        sqlQueryMessage.className = 'text-sm text-center p-2 rounded-md bg-green-100 text-green-800';
+                        break;
+                    case 'error':
+                        executeSqlBtn.disabled = false;
+                        executeSqlBtn.textContent = 'Execute Again';
+                        sqlQueryMessage.className = 'text-sm text-center p-2 rounded-md bg-red-100 text-red-800';
+                        break;
+                }
+            }
+
+            async function resolveBackendUrl() {
+                // Try a short list of likely ports, then fallback to current BACKEND_URL
+                const candidates = [
+                    'http://localhost:3100','http://localhost:3101','http://localhost:3102','http://localhost:3103','http://localhost:3104',
+                    'http://localhost:3105','http://localhost:3106','http://localhost:3107','http://localhost:3108','http://localhost:3109','http://localhost:3110',
+                    'http://localhost:3001','http://localhost:3002','http://localhost:3003','http://localhost:3004','http://localhost:3005',
+                    'http://localhost:3006','http://localhost:3007','http://localhost:3008','http://localhost:3009','http://localhost:3000'
+                ];
+                for (const base of candidates) {
+                    try {
+                        const resp = await fetch(`${base}/server-info`, { method: 'GET' });
+                        if (resp.ok) {
+                            const info = await resp.json();
+                            if (info && info.success) {
+                                BACKEND_URL = base;
+                                return;
+                            }
+                        }
+                    } catch (_) {}
+                }
+            }
+
+            async function ensureRealtime() {
+                await resolveBackendUrl();
+                if (eventSource) return;
+                try {
+                    eventSource = new EventSource(`${BACKEND_URL}/events`);
+                    eventSource.onmessage = (ev) => {
+                        try {
+                            const data = JSON.parse(ev.data || '{}');
+                    if (data.type === 'status') {
+                                if (data.status === 'connected') {
+                                    const map = { sit: { name: 'SIT', port: 4085 }, uat1: { name: 'UAT1', port: 4023 }, uat2: { name: 'UAT2', port: 4022 } };
+                                    setState({
+                                        status: 'connected',
+                                        selectedEnv: data.env || state.selectedEnv,
+                                        connectionDetails: {
+                                            ...(map[data.env || state.selectedEnv] || { name: 'Unknown', port: '' }),
+                                            user: 'Manuchet@cardx.co.th',
+                                    statusText: `PID: ${data.pid}`,
+                                    localPort: data.localPort || map[data.env || state.selectedEnv]?.port,
+                                        }
+                                    });
+                                } else {
+                                    if (state.status !== 'connecting') {
+                                        setState({ status: 'disconnected', connectionDetails: null });
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('Failed to parse SSE message', e);
+                        }
+                    };
+                    eventSource.onerror = () => {
+                        // try to reconnect later
+                        try { eventSource.close(); } catch (_) {}
+                        eventSource = null;
+                        setTimeout(ensureRealtime, 3000);
+                    };
+                } catch (e) {
+                    console.warn('SSE not available, will skip realtime updates');
+                }
+            }
+
+            async function startSsoLogin() {
+                ssoStatus.textContent = 'กำลังเรียก SSO login...';
+                try {
+                    const resp = await fetch(`${BACKEND_URL}/sso-login`, { method: 'POST' });
+                    const result = await resp.json();
+                    if (result.success) {
+                        ssoStatus.textContent = 'สั่ง SSO สำเร็จ: กรุณายืนยันในเบราว์เซอร์\n\n' + (result.stdout || '');
+                    } else {
+                        ssoStatus.textContent = 'เกิดข้อผิดพลาด: ' + (result.message || 'Unknown error');
+                    }
+                } catch (e) {
+                    ssoStatus.textContent = 'เชื่อมต่อ Backend ไม่ได้: ' + e.message;
+                }
+            }
+            
+            async function callGemini(prompt) {
+                setState({ geminiLoading: true, geminiOutput: null });
+                const apiKey = ""; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`API call failed with status: ${response.status}`);
+                    }
+                    
+                    const result = await response.json();
+                    const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                    
+                    if (text) {
+                        setState({ geminiLoading: false, geminiOutput: text.trim() });
+                    } else {
+                        throw new Error("No content received from Gemini.");
+                    }
+                } catch (error) {
+                    console.error("Gemini API Error:", error);
+                    setState({ geminiLoading: false, geminiOutput: `เกิดข้อผิดพลาดในการเรียก Gemini API: ${error.message}` });
+                }
+            }
+            
+            async function handleConnect() {
+                setState({ status: 'connecting', geminiOutput: null });
+                
+                try {
+                    const response = await fetch(`${BACKEND_URL}/connect`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ env: state.selectedEnv })
+                    });
+
+                    const result = await response.json();
+
+                    if (!response.ok || !result.success) {
+                        throw new Error(result.message || 'Unknown error from server');
+                    }
+                    
+                    setState({
+                        status: 'connected',
+                        connectionDetails: {
+                            ...envData[state.selectedEnv],
+                            user: 'Manuchet@cardx.co.th',
+                            statusText: result.data
+                        },
+                        isDbModalVisible: false,
+                        dbTestStatus: 'idle',
+                        dbTestMessage: ''
+                    });
+
+                } catch (error) {
+                    console.error('Connection Error:', error);
+                    setState({
+                        status: 'error',
+                        errorMessage: `ไม่สามารถเชื่อมต่อกับ Backend Server ได้: ${error.message}`
+                    });
+                }
+            }
+            
+            async function handleDisconnect() {
+                try {
+                    const response = await fetch(`${BACKEND_URL}/disconnect`, {
+                        method: 'POST',
+                    });
+                    const result = await response.json();
+                    if (!response.ok || !result.success) {
+                        console.error('Logout failed on backend:', result.message);
+                    }
+                } catch (error) {
+                    console.error('Failed to send disconnect request to server:', error);
+                } finally {
+                    setState({ 
+                        status: 'disconnected', 
+                        connectionDetails: null,
+                        geminiOutput: null,
+                        isDbModalVisible: false,
+                        currentPage: 'main'
+                    });
+                }
+            }
+
+            function handleTestDbConnection(e) {
+                e.preventDefault();
+                setState({ dbTestStatus: 'testing', dbTestMessage: 'กำลังทดสอบการเชื่อมต่อ...' });
+
+                setTimeout(() => {
+                    if (Math.random() > 0.3) {
+                        setState({ 
+                            dbTestStatus: 'success', 
+                            dbTestMessage: '',
+                            isDbModalVisible: false,
+                            currentPage: 'query', 
+                            sqlQueryStatus: 'idle',
+                            sqlQueryResult: '',
+                            sqlQueryMessage: 'กรุณาตรวจสอบและรันคำสั่ง',
+                            dbConnectionInfo: {
+                                host: dbHostInput.value,
+                                port: dbPortInput.value,
+                                user: dbUserInput.value,
+                                password: document.getElementById('db-pass').value
+                            }
+                        });
+                        sqlQueryInput.value = DEFAULT_SQL_QUERY;
+                    } else {
+                        setState({ dbTestStatus: 'failed', dbTestMessage: 'เชื่อมต่อล้มเหลว กรุณาตรวจสอบข้อมูล' });
+                    }
+                }, 1500);
+            }
+
+            function handleExecuteQuery() {
+                const query = sqlQueryInput.value.trim();
+                if (!query) {
+                    setState({ 
+                        sqlQueryStatus: 'error', 
+                        sqlQueryMessage: 'กรุณาใส่คำสั่ง SQL',
+                        sqlQueryResult: ''
+                    });
+                    return;
+                }
+
+                setState({ sqlQueryStatus: 'querying', sqlQueryMessage: 'กำลังประมวลผลคำสั่ง...' });
+
+                // Execute actual SQL query
+                fetch(`${BACKEND_URL}/execute-sql`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query: query,
+                        dbConfig: state.dbConnectionInfo
+                    })
+                })
+                .then(response => response.json())
+                .then(result => {
+                    if (result.success) {
+                        setState({
+                            sqlQueryStatus: 'success',
+                            sqlQueryMessage: `Query สำเร็จ! พบ ${result.data.length} แถว`,
+                            sqlQueryResult: result.data
+                        });
+                    } else {
+                        setState({
+                            sqlQueryStatus: 'error',
+                            sqlQueryMessage: `Error: ${result.message}`,
+                            sqlQueryResult: []
+                        });
+                    }
+                })
+                .catch(error => {
+                    setState({
+                        sqlQueryStatus: 'error',
+                        sqlQueryMessage: `Connection Error: ${error.message}`,
+                        sqlQueryResult: []
+                    });
+                });
+            }
+
+            function handleGenerateSummary() {
+                const { name, port } = envData[state.selectedEnv];
+                const prompt = `Generate a short, friendly, and professional message in Thai for a software development team chat. The message should state that a user has successfully connected to the "${name}" environment via Teleport local auth. The local port for access is "${port}". Keep it concise and ready to paste.`;
+                callGemini(prompt);
+            }
+
+            function handleTroubleshoot() {
+                const { name } = envData[state.selectedEnv];
+                const prompt = `I am a developer trying to connect to our "${name}" environment using Teleport with the command 'tsh login --auth=local'. I received the following error message: "${state.errorMessage}". Provide 3-4 common causes for this error and suggest simple, actionable troubleshooting steps for each. The response must be in Thai and formatted with bullet points for easy reading.`;
+                callGemini(prompt);
+            }
+            
+            function handleCopy() {
+                if (navigator.clipboard) {
+                     navigator.clipboard.writeText(state.geminiOutput).then(() => {
+                        copyBtn.textContent = 'คัดลอกแล้ว!';
+                        setTimeout(() => { copyBtn.textContent = 'คัดลอก'; }, 2000);
+                     });
+                } else {
+                    const textArea = document.createElement('textarea');
+                    textArea.value = state.geminiOutput;
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    try {
+                        document.execCommand('copy');
+                        copyBtn.textContent = 'คัดลอกแล้ว!';
+                        setTimeout(() => { copyBtn.textContent = 'คัดลอก'; }, 2000);
+                    } catch (err) {
+                        console.error('Fallback: Oops, unable to copy', err);
+                    }
+                    document.body.removeChild(textArea);
+                }
+            }
+
+            // Main Event Listeners
+            environmentSelect.addEventListener('change', (e) => setState({ selectedEnv: e.target.value }));
+            connectBtn.addEventListener('click', handleConnect);
+            disconnectBtn.addEventListener('click', handleDisconnect);
+            generateSummaryBtn.addEventListener('click', handleGenerateSummary);
+            troubleshootBtn.addEventListener('click', handleTroubleshoot);
+            copyBtn.addEventListener('click', handleCopy);
+            ssoLoginBtn.addEventListener('click', () => { ssoModal.classList.remove('hidden'); ssoStatus.textContent = ''; });
+            ssoCloseBtn.addEventListener('click', () => ssoModal.classList.add('hidden'));
+            ssoCancelBtn.addEventListener('click', () => ssoModal.classList.add('hidden'));
+            ssoRunBtn.addEventListener('click', startSsoLogin);
+            exportExcelBtn.addEventListener('click', exportToExcel);
+            
+            // DB Modal & SQL Page Event Listeners
+            openDbModalBtn.addEventListener('click', () => setState({ isDbModalVisible: true, dbTestStatus: 'idle', dbTestMessage: '' }));
+            dbForm.addEventListener('submit', handleTestDbConnection);
+            closeDbBtn.addEventListener('click', () => setState({ isDbModalVisible: false }));
+            executeSqlBtn.addEventListener('click', handleExecuteQuery);
+            backToMainBtn.addEventListener('click', () => setState({ currentPage: 'main' }));
+            sqlQueryInput.addEventListener('input', () => {
+                setState({ sqlQueryStatus: 'idle' });
+            });
+
+            function renderResultTable(data) {
+                if (!data || data.length === 0) {
+                    sqlResultTable.innerHTML = '<p class="p-4 text-slate-500 text-center">ไม่มีข้อมูล</p>';
+                    return;
+                }
+
+                const firstRow = data[0];
+                const allKeys = Object.keys(firstRow);
+                const preferredExisting = PREFERRED_COLUMNS.filter(c => allKeys.includes(c.key));
+                const preferredKeys = preferredExisting.map(c => c.key);
+                const remaining = allKeys.filter(k => !preferredKeys.includes(k));
+                const orderedKeys = [...preferredKeys, ...remaining];
+                
+                let tableHTML = `
+                    <table class="w-full text-sm">
+                        <thead class="sticky top-0 z-10 bg-slate-900 border-b border-slate-700">
+                            <tr>
+                                ${orderedKeys.map(col => {
+                                    const pref = PREFERRED_COLUMNS.find(c => c.key === col);
+                                    const label = pref ? pref.label : col;
+                                    return `<th class=\"px-4 py-2 text-left font-semibold text-slate-100 bg-slate-900\">${label}</th>`;
+                                }).join('')}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.map((row, index) => `
+                                <tr class=\"${index % 2 === 0 ? 'bg-slate-800' : 'bg-slate-700'} border-b border-slate-700 hover:bg-slate-600\">`
+                                    + orderedKeys.map(col => `<td class=\"px-4 py-2 text-slate-100\">${row[col] ?? ''}</td>`).join('') +
+                                `</tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+                
+                sqlResultTable.innerHTML = tableHTML;
+            }
+
+            function exportToExcel() {
+                const data = state.sqlQueryResult || [];
+                if (!data.length) return;
+                const worksheet = XLSX.utils.json_to_sheet(data);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, worksheet, 'Results');
+                const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+                const blob = new Blob([wbout], { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+                a.download = `query-results-${ts}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+
+            render();
+            ensureRealtime();
+        });
+    </script>
+</body>
+</html>
+
